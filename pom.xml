@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>gov.va.bip.empwr</groupId>
+    <artifactId>mule-hikaricp-db-connector</artifactId>
+    <version>1.0.0</version>
+    <packaging>mule-extension</packaging>
+    <name>HikariCP Database Connector</name>
+
+    <parent>
+        <groupId>org.mule.extensions</groupId>
+        <artifactId>mule-modules-parent</artifactId>
+        <version>1.9.11</version>
+    </parent>
+
+    <description>HikariCP high-performance database connection pool connector for Mule 4.
+        Drop-in replacement for C3P0 with superior connection management, leak detection,
+        and health monitoring. Provides Select, Insert, Update, Delete, and pool management
+        operations backed by HikariCP connection pooling.</description>
+
+    <properties>
+        <hikaricp.version>5.1.0</hikaricp.version>
+        <ojdbc.version>19.24.0.0</ojdbc.version>
+        <java.release.version>17</java.release.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <!-- Copy dependencies to target/dependency for bundling -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-deps</id>
+                        <phase>package</phase>
+                        <goals><goal>copy-dependencies</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/dependency</outputDirectory>
+                            <includeGroupIds>com.zaxxer,com.oracle.database.jdbc</includeGroupIds>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Post-process: inject extension-model.json into both jars after build -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>inject-extension-model</id>
+                        <phase>verify</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <!-- === 1. Inject extension-model.json === -->
+                                <copy file="${project.build.directory}/temporal-extension-model.json"
+                                      tofile="${project.build.directory}/extension-model-staging/META-INF/extension-model.json" />
+                                <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}.jar"
+                                     update="true"
+                                     basedir="${project.build.directory}/extension-model-staging"
+                                     includes="META-INF/extension-model.json" />
+                                <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}-mule-plugin.jar"
+                                     update="true"
+                                     basedir="${project.build.directory}/extension-model-staging"
+                                     includes="META-INF/extension-model.json" />
+
+                                <!-- === 2. Bundle HikariCP + OJDBC classes into mule-plugin jar === -->
+                                <mkdir dir="${project.build.directory}/shade-staging" />
+                                <unjar dest="${project.build.directory}/shade-staging">
+                                    <fileset dir="${project.build.directory}/dependency">
+                                        <include name="HikariCP-${hikaricp.version}.jar" />
+                                        <include name="ojdbc8-${ojdbc.version}.jar" />
+                                    </fileset>
+                                    <patternset>
+                                        <include name="com/**" />
+                                        <include name="oracle/**" />
+                                        <exclude name="META-INF/**" />
+                                    </patternset>
+                                </unjar>
+                                <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}-mule-plugin.jar"
+                                     update="true"
+                                     basedir="${project.build.directory}/shade-staging" />
+
+                                <!-- === 3. Fix empty exportedPackages in mule-artifact.json === -->
+                                <mkdir dir="${project.build.directory}/mule-artifact-staging/META-INF/mule-artifact" />
+                                <unjar src="${project.build.directory}/${project.artifactId}-${project.version}-mule-plugin.jar"
+                                       dest="${project.build.directory}/mule-artifact-staging">
+                                    <patternset>
+                                        <include name="META-INF/mule-artifact/mule-artifact.json" />
+                                    </patternset>
+                                </unjar>
+                                <replaceregexp file="${project.build.directory}/mule-artifact-staging/META-INF/mule-artifact/mule-artifact.json"
+                                               match='"exportedPackages":\[\]'
+                                               replace='"exportedPackages":["gov.va.bip.hikari","gov.va.bip.hikari.api.error","gov.va.bip.hikari.internal.connection","gov.va.bip.hikari.internal.operation"]'
+                                               flags="g" />
+                                <replaceregexp file="${project.build.directory}/mule-artifact-staging/META-INF/mule-artifact/mule-artifact.json"
+                                               match='"exportedResources":\[\]'
+                                               replace='"exportedResources":["META-INF/extension-model.json","META-INF/hikaricp-database-extension-descriptions.xml"]'
+                                               flags="g" />
+                                <!-- Strip supportedJavaVersions to match standard connector format -->
+                                <replaceregexp file="${project.build.directory}/mule-artifact-staging/META-INF/mule-artifact/mule-artifact.json"
+                                               match=',"supportedJavaVersions":\[&quot;17&quot;\]'
+                                               replace=''
+                                               flags="g" />
+                                <replaceregexp file="${project.build.directory}/mule-artifact-staging/META-INF/mule-artifact/mule-artifact.json"
+                                               match=',"supportedJavaVersions":\["17"\]'
+                                               replace=''
+                                               flags="g" />
+                                <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}.jar"
+                                     update="true"
+                                     basedir="${project.build.directory}/mule-artifact-staging"
+                                     includes="META-INF/mule-artifact/mule-artifact.json" />
+                                <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}-mule-plugin.jar"
+                                     update="true"
+                                     basedir="${project.build.directory}/mule-artifact-staging"
+                                     includes="META-INF/mule-artifact/mule-artifact.json" />
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencies>
+        <!-- HikariCP Connection Pool -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>${hikaricp.version}</version>
+        </dependency>
+
+        <!-- Oracle JDBC Driver -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc8</artifactId>
+            <version>${ojdbc.version}</version>
+        </dependency>
+    </dependencies>
+
+    <repositories>
+        <repository>
+            <id>nexus-all-public</id>
+            <name>Nexus All Public</name>
+            <url>https://nexus.dev8.bip.va.gov/repository/maven-all-public</url>
+        </repository>
+        <repository>
+            <id>mulesoft-releases</id>
+            <name>MuleSoft Releases</name>
+            <url>https://repository.mulesoft.org/releases/</url>
+        </repository>
+        <repository>
+            <id>anypoint-exchange-v3</id>
+            <name>Anypoint Exchange V3</name>
+            <url>https://maven.anypoint.mulesoft.com/api/v3/maven</url>
+        </repository>
+    </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>mulesoft-releases</id>
+            <name>MuleSoft Releases</name>
+            <url>https://repository.mulesoft.org/releases/</url>
+        </pluginRepository>
+        <pluginRepository>
+            <id>nexus-mulesoft-public</id>
+            <name>Nexus MuleSoft Public</name>
+            <url>https://nexus.dev8.bip.va.gov/repository/mulesoft-public</url>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <distributionManagement>
+        <repository>
+            <id>nexus3</id>
+            <url>https://nexus.dev8.bip.va.gov/repository/maven-releases</url>
+        </repository>
+        <snapshotRepository>
+            <id>nexus3</id>
+            <url>https://nexus.dev8.bip.va.gov/repository/maven-snapshots</url>
+        </snapshotRepository>
+    </distributionManagement>
+
+</project>
